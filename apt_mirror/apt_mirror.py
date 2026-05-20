@@ -440,6 +440,12 @@ class RepositoryMirror:
             self._error = True
             return metadata_files
 
+        if self._config.diff_paths:
+            metadata_files = [
+                f for f in metadata_files
+                if str(f.path) not in self._config.diff_paths
+            ]
+
         self._downloader.add(*metadata_files)
 
         self._log.info(
@@ -466,6 +472,12 @@ class RepositoryMirror:
                 self._config.weak_size_check,
                 self._downloader.get_missing_sources(),
             )
+
+        if self._config.diff_paths:
+            pool_files = [
+                f for f in pool_files
+                if str(f.path) not in self._config.diff_paths
+            ]
 
         self._downloader.add(*pool_files)
 
@@ -867,7 +879,7 @@ def is_alternative_binary_path():
     return Path(sys.argv[0]).name == "apt-mirror2"
 
 
-def get_config_file() -> Path:
+def get_config_file() -> tuple[Path, frozenset[str]]:
     def get_prog() -> str | None:
         if Path(sys.argv[0]).name == "__main__.py":
             return f"{Path(sys.executable).name} -m apt_mirror"
@@ -881,6 +893,7 @@ def get_config_file() -> Path:
         default_configfile = Config.DEFAULT_CONFIGFILE2
 
     parser.add_argument("--version", action="store_true", help="Show version")
+    parser.add_argument("--diff", type=Path, default=None, help="Path to a file containing paths to skip")
     parser.add_argument(
         "configfile",
         help=f"Path to config file. Default {Config.DEFAULT_CONFIGFILE}",
@@ -899,15 +912,24 @@ def get_config_file() -> Path:
         LOG.error(f"invalid config file specified: {config_file}")
         sys.exit(1)
 
-    return config_file
+    diff_paths: frozenset[str] = frozenset()
+    if args.diff:
+        with open(args.diff, "rt", encoding="utf-8") as fp:
+            diff_paths = frozenset(
+                line.strip() for line in fp if line.strip()
+            )
+
+    return config_file, diff_paths
 
 
 def main() -> int:
+    config_file, diff_paths = get_config_file()
     config = Config(
-        get_config_file(),
+        config_file,
         Config.DEFAULT_BASE_PATH2
         if is_alternative_binary_path()
         else Config.DEFAULT_BASE_PATH,
+        diff_paths=diff_paths,
     )
 
     # We should create working directories before using file logs

@@ -461,10 +461,11 @@ class Config:
     DEFAULT_BASE_PATH2 = "/var/spool/apt-mirror2"
 
     def __init__(
-        self, config_file: Path, default_base_path: str = DEFAULT_BASE_PATH
+        self, config_file: Path, default_base_path: str = DEFAULT_BASE_PATH, diff_paths: frozenset[str] = frozenset()
     ) -> None:
         self._log = LoggerFactory.get_logger(self)
         self._repositories: URLDict[BaseRepository] = URLDict()
+        self.diff_paths = diff_paths
 
         self._list_files = [config_file]
         self._deb822_files = []
