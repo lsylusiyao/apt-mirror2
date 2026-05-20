@@ -443,7 +443,7 @@ class RepositoryMirror:
         if self._config.diff_paths:
             metadata_files = [
                 f for f in metadata_files
-                if str(f.path) not in self._config.diff_paths
+                if f.path.as_posix() not in self._config.diff_paths
             ]
 
         self._downloader.add(*metadata_files)
@@ -476,7 +476,7 @@ class RepositoryMirror:
         if self._config.diff_paths:
             pool_files = [
                 f for f in pool_files
-                if str(f.path) not in self._config.diff_paths
+                if f.path.as_posix() not in self._config.diff_paths
             ]
 
         self._downloader.add(*pool_files)
@@ -916,7 +916,7 @@ def get_config_file() -> tuple[Path, frozenset[str]]:
     if args.diff:
         with open(args.diff, "rt", encoding="utf-8") as fp:
             diff_paths = frozenset(
-                line.strip() for line in fp if line.strip()
+                line.strip().replace("\\", "/") for line in fp if line.strip()
             )
 
     return config_file, diff_paths
