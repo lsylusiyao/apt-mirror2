@@ -443,7 +443,7 @@ class RepositoryMirror:
         if self._config.diff_paths:
             metadata_files = [
                 f for f in metadata_files
-                if f.path.as_posix() not in self._config.diff_paths
+                if hash(f.path.as_posix()) not in self._config.diff_paths
             ]
 
         self._downloader.add(*metadata_files)
@@ -476,7 +476,7 @@ class RepositoryMirror:
         if self._config.diff_paths:
             pool_files = [
                 f for f in pool_files
-                if f.path.as_posix() not in self._config.diff_paths
+                if hash(f.path.as_posix()) not in self._config.diff_paths
             ]
 
         self._downloader.add(*pool_files)
@@ -879,7 +879,7 @@ def is_alternative_binary_path():
     return Path(sys.argv[0]).name == "apt-mirror2"
 
 
-def get_config_file() -> tuple[Path, frozenset[str]]:
+def get_config_file() -> tuple[Path, frozenset[int]]:
     def get_prog() -> str | None:
         if Path(sys.argv[0]).name == "__main__.py":
             return f"{Path(sys.executable).name} -m apt_mirror"
@@ -912,11 +912,11 @@ def get_config_file() -> tuple[Path, frozenset[str]]:
         LOG.error(f"invalid config file specified: {config_file}")
         sys.exit(1)
 
-    diff_paths: frozenset[str] = frozenset()
+    diff_paths: frozenset[int] = frozenset()
     if args.diff:
         with open(args.diff, "rt", encoding="utf-8") as fp:
             diff_paths = frozenset(
-                line.strip().replace("\\", "/") for line in fp if line.strip()
+                hash(line.strip().replace("\\", "/")) for line in fp if line.strip()
             )
 
     return config_file, diff_paths
