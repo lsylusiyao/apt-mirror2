@@ -1,0 +1,29 @@
+### Kylin V10 SP1 2203 example for the external WSL host.
+### Change only the arch/suite lines after checking the target Kylin release.
+
+set base_path          /var/spool/apt-mirror
+set mirror_path        $base_path/mirror
+set skel_path          $base_path/skel
+set var_path           $base_path/var
+set nthreads           8
+
+### Verify all hashes published by the Release file while downloading.
+set check_hashes       SHA512, SHA256, SHA1, MD5Sum
+set weak_size_check    0
+
+### Upstream deletions are inferred from current package indexes and applied
+### to the external mirror only when apt-mirror's 40% wipe guard permits it.
+set _autoclean         1
+set wipe_size_ratio    0.4
+set wipe_count_ratio   0.4
+
+### Install the Kylin archive key in WSL and change this to force if the
+### selected suite publishes a usable InRelease/Release.gpg signature.
+set gpg_verify         off
+
+deb [ arch=amd64 ] https://archive.kylinos.cn/kylin/KYLIN-ALL 10.1-2203-updates main restricted universe multiverse
+clean https://archive.kylinos.cn/kylin/KYLIN-ALL
+
+### Other suites advertised by archive.kylinos.cn include 10.0, 10.1,
+### 10.1-2107-updates and 10.1-2203-hwe-updates. Do not enable one unless it
+### belongs to the Kylin systems you need to serve.

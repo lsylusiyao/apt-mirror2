@@ -47,6 +47,7 @@ uvloop = [
 
 [project.scripts]
 apt-mirror = "apt_mirror.apt_mirror:main"
+apt-mirror-offline = "apt_mirror.offline:main"
 
 [project.urls]
 Homepage = "https://gitlab.com/apt-mirror2/apt-mirror2/"
