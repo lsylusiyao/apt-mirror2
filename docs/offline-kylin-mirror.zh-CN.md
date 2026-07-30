@@ -107,7 +107,68 @@ sudo ./scripts/linux/with-kylin-offline-vhdx.sh \
 若删除比例达到 40%，还必须直接调用 CLI 并显式添加
 `--allow-large-deletes`，防止上游元数据异常导致镜像被清空。
 
-## 三、多张光盘
+## 三、内网 Windows 与 VHDX/VMDK
+
+内网 Windows 安装 Python 3.10+ 后，只需离线安装本项目本身；导入功能只使用
+Python 标准库：
+
+```powershell
+py -3 -m pip install --no-deps 'D:\software\apt-mirror2'
+```
+
+介质已经挂载为盘符时，可以直接使用与 Linux Bash 脚本等效的 PowerShell：
+
+```powershell
+# 导入并在需要时交互确认删除
+.\scripts\windows\Import-KylinOfflineMirror.ps1 `
+  -Bundle 'R:\outgoing\bundle-20260730T120000' `
+  -MirrorRoot 'D:\apt-mirror' `
+  -FeedbackDirectory 'R:\feedback' `
+  -DeletePolicy prompt
+
+# 定期全量 SHA-256 巡检
+.\scripts\windows\Test-KylinOfflineMirror.ps1 `
+  -MirrorRoot 'D:\apt-mirror' `
+  -FeedbackDirectory 'R:\feedback'
+```
+
+前文 `New-KylinOfflineVhdx.ps1` 创建的是动态 **VHDX**，不是 VMDK。Windows
+可以原生挂载 VHD/VHDX。以下包装器会挂载镜像、执行导入子进程，并在成功或失败
+后卸载。`{MEDIA_ROOT}` 会替换为实际盘符根目录：
+
+```powershell
+$importCommand = @(
+  'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+  (Resolve-Path '.\scripts\windows\Import-KylinOfflineMirror.ps1').Path,
+  '{MEDIA_ROOT}outgoing\bundle-20260730T120000',
+  'D:\apt-mirror',
+  '{MEDIA_ROOT}feedback',
+  'prompt'
+)
+
+.\scripts\windows\Invoke-WithKylinOfflineDisk.ps1 `
+  -ImagePath 'E:\kylin-transfer.vhdx' `
+  -DriveLetter R `
+  -Command $importCommand
+```
+
+Windows 本身不能原生挂载真正的 `.vmdk`。若介质确实是 VMDK，需要安装包含
+`vmware-mount.exe` 的 VMware Virtual Disk Development Kit/DiskMount，再执行：
+
+```powershell
+.\scripts\windows\Invoke-WithKylinOfflineDisk.ps1 `
+  -ImagePath 'E:\kylin-transfer.vmdk' `
+  -DriveLetter R `
+  -VmdkVolume 1 `
+  -VmwareMountPath 'C:\Program Files (x86)\VMware\VMware Virtual Disk Development Kit\bin\vmware-mount.exe' `
+  -Command $importCommand
+```
+
+VMDK 必须包含 Windows 能识别的文件系统；不要同时把同一个 VMDK 连接给虚拟机，
+也不要绕过快照链直接写入某个增量 extent。包装器按读写模式挂载，以便把 ACK
+和修复请求写回 `feedback`。
+
+## 四、多张光盘
 
 导出时指定单卷载荷上限。DVD 建议预留文件系统和控制文件空间，例如：
 
@@ -124,6 +185,14 @@ sudo ./scripts/linux/with-kylin-offline-vhdx.sh \
 sudo ./scripts/linux/stage-kylin-volume.sh /media/cdrom /var/tmp/kylin-staging
 ```
 
+内网 Windows 则逐张执行：
+
+```powershell
+.\scripts\windows\Stage-KylinOfflineVolume.ps1 `
+  -MountedDiscOrVolume 'E:\' `
+  -StagingDirectory 'D:\kylin-staging'
+```
+
 全部卷齐后，脚本会显示完整 bundle 路径，再执行导入：
 
 ```bash
@@ -138,7 +207,7 @@ sudo ./scripts/linux/import-kylin-offline.sh \
 `deletions-pending.json` 用另一张可写介质带回，并放进下一次导出介质的
 `feedback` 目录。
 
-## 四、增量、损坏检测与修复
+## 五、增量、损坏检测与修复
 
 每个离线 bundle 都包含：
 
@@ -162,7 +231,7 @@ SHA-256 能检测介质和存储的意外损坏，但不能抵抗能够同时篡
 攻击。对抗此类威胁时还应强制验证麒麟 Release 签名，或在组织内对离线 bundle
 另行数字签名。
 
-## 五、给内网客户端提供服务
+## 六、给内网客户端提供服务
 
 示例导出的是 `/var/spool/apt-mirror/mirror`，因此内网目录会保留
 `archive.kylinos.cn/kylin/KYLIN-ALL` 层级。让 nginx/Apache 的文档根指向

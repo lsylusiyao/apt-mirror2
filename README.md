@@ -131,8 +131,8 @@ options:
 ## Air-gapped Kylin mirror
 
 Verified incremental transfer between an external Windows/WSL host and an
-internal Linux host is supported by `apt-mirror-offline`. It includes optical
-volume splitting, full destination SHA-256 verification, corruption repair
+internal Linux or Windows host is supported by `apt-mirror-offline`. It includes
+optical volume splitting, full destination SHA-256 verification, corruption repair
 feedback, and reviewed propagation of upstream deletions. See the
 [Chinese deployment guide](docs/offline-kylin-mirror.zh-CN.md) and the
 [`archive.kylinos.cn` amd64 example](examples/kylin/mirror-amd64.list).
