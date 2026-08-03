@@ -1,4 +1,4 @@
-### Kylin V10 SP1 2203 example for the external WSL host.
+### Kylin V10 SP1 2203 example for an external Linux or Windows/WSL host.
 ### Change only the arch/suite lines after checking the target Kylin release.
 
 set base_path          /var/spool/apt-mirror
@@ -17,7 +17,7 @@ set _autoclean         1
 set wipe_size_ratio    0.4
 set wipe_count_ratio   0.4
 
-### Install the Kylin archive key in WSL and change this to force if the
+### Install the Kylin archive key on Linux/WSL and change this to force if the
 ### selected suite publishes a usable InRelease/Release.gpg signature.
 set gpg_verify         off
 

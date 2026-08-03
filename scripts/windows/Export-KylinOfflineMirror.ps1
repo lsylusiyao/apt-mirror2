@@ -32,6 +32,8 @@ if (-not (Test-Path -LiteralPath $MediaRoot -PathType Container)) {
 }
 
 $configWsl = Convert-ToWslPath $MirrorConfig
+$mirrorRootWsl = Convert-ToWslPath $MirrorRoot
+$stateDirectoryWsl = Convert-ToWslPath $StateDirectory
 $mediaFull = (Resolve-Path -LiteralPath $MediaRoot).Path
 $feedbackWindows = Join-Path $mediaFull 'feedback'
 $outgoingWindows = Join-Path $mediaFull 'outgoing'
@@ -51,8 +53,8 @@ $bundleWindows = Join-Path $outgoingWindows "bundle-$stamp"
 $bundleWsl = Convert-ToWslPath $bundleWindows
 $offlineArguments = @(
     '-d', $WslDistribution, '-u', 'root', '--',
-    'apt-mirror-offline', 'export', $MirrorRoot, $bundleWsl,
-    '--state-dir', $StateDirectory,
+    'apt-mirror-offline', 'export', $mirrorRootWsl, $bundleWsl,
+    '--state-dir', $stateDirectoryWsl,
     '--feedback-dir', $feedbackWsl,
     '--volume-size', $VolumeSize
 )
