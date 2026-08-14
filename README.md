@@ -135,7 +135,8 @@ of Linux and Windows (the external Windows workflow uses WSL). It can synchroniz
 mirror contents stored in separate source and target VHDX files without comparing
 their raw disk blocks. It includes optical volume splitting, full destination
 SHA-256 verification, corruption repair feedback, and reviewed propagation of
-upstream deletions. See the
+upstream deletions. Interrupted HTTP package downloads persist in a separate
+partial area and resume with Range requests when the same command is rerun. See the
 [Chinese deployment guide](docs/offline-kylin-mirror.zh-CN.md) and the
 [`archive.kylinos.cn` amd64 example](examples/kylin/mirror-amd64.list).
 
@@ -150,6 +151,8 @@ In addition there are some enhancements available:
 
 - Non-zero exit code is returned if some of required files were not downloaded due to network or server errors or
   no repositories were configured.
+- Interrupted HTTP downloads are kept outside the published mirror and resumed with
+  Range requests on the next run; final files are replaced only after size/hash checks.
 - Flexible support for filtering by package name, source name, section, or Debtags
 - Optional Release files GPG signature verification
 - Repositories lacking MD5 hashes are correctly mirrored

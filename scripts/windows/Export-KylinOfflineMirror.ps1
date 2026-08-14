@@ -41,10 +41,27 @@ New-Item -ItemType Directory -Force -Path $feedbackWindows, $outgoingWindows | O
 $feedbackWsl = Convert-ToWslPath $feedbackWindows
 
 if (-not $SkipOnlineSync) {
-    Write-Host 'Synchronizing archive.kylinos.cn in WSL...'
-    & wsl.exe -d $WslDistribution -u root -- apt-mirror $configWsl
-    if ($LASTEXITCODE -ne 0) {
-        throw "apt-mirror failed with exit code $LASTEXITCODE; no offline bundle was created"
+    $syncSucceeded = $false
+    try {
+        & wsl.exe -d $WslDistribution -u root -- python3 -c `
+            'from apt_mirror.download.downloader import Downloader; assert Downloader.PARTIAL_DIRECTORY == ".apt-mirror2-partial"'
+        if ($LASTEXITCODE -ne 0) {
+            throw 'The resume-enabled version of this project is not installed for WSL root Python 3.'
+        }
+        Write-Host 'Synchronizing archive.kylinos.cn in WSL (an interrupted rerun resumes HTTP partials)...'
+        & wsl.exe -d $WslDistribution -u root -- python3 -m apt_mirror $configWsl
+        $syncExitCode = $LASTEXITCODE
+        if ($syncExitCode -ne 0) {
+            throw "apt-mirror failed with exit code $syncExitCode; no offline bundle was created"
+        }
+        $syncSucceeded = $true
+    }
+    finally {
+        if (-not $syncSucceeded) {
+            & wsl.exe -d $WslDistribution -u root -- sync
+            Write-Warning 'Online synchronization did not finish. Completed files and HTTP partial downloads were retained.'
+            Write-Warning 'Rerun this script with the same MirrorConfig and MirrorRoot to continue; do not use SkipOnlineSync yet.'
+        }
     }
 }
 
@@ -53,7 +70,7 @@ $bundleWindows = Join-Path $outgoingWindows "bundle-$stamp"
 $bundleWsl = Convert-ToWslPath $bundleWindows
 $offlineArguments = @(
     '-d', $WslDistribution, '-u', 'root', '--',
-    'apt-mirror-offline', 'export', $mirrorRootWsl, $bundleWsl,
+    'python3', '-m', 'apt_mirror.offline', 'export', $mirrorRootWsl, $bundleWsl,
     '--state-dir', $stateDirectoryWsl,
     '--feedback-dir', $feedbackWsl,
     '--volume-size', $VolumeSize

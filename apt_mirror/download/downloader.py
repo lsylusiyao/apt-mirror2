@@ -64,6 +64,7 @@ class DownloaderSettings:
 class Downloader(ABC):
     BUFFER_SIZE = 8 * 1024 * 1024
     RETRY_TIMEOUT = 5
+    PARTIAL_DIRECTORY = ".apt-mirror2-partial"
 
     def __init__(self, *, settings: DownloaderSettings):
         self._log = LoggerFactory.get_logger(
@@ -241,6 +242,69 @@ class Downloader(ABC):
             f" errors: {self._error_count} ({format_size(self._error_size)})"
         )
 
+    @classmethod
+    def get_partial_path(cls, target_root_path: Path, source_path: Path) -> Path:
+        return target_root_path / cls.PARTIAL_DIRECTORY / source_path
+
+    @classmethod
+    def _prune_partial_directories(
+        cls, partial_path: Path, target_root_path: Path
+    ) -> None:
+        partial_root = target_root_path / cls.PARTIAL_DIRECTORY
+        parent = partial_path.parent
+        while parent.is_relative_to(partial_root):
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            if parent == partial_root:
+                break
+            parent = parent.parent
+
+    @classmethod
+    def _remove_partial(cls, partial_path: Path, target_root_path: Path) -> None:
+        partial_path.unlink(missing_ok=True)
+        cls._prune_partial_directories(partial_path, target_root_path)
+
+    def _new_hashes(
+        self, variant: DownloadFileCompressionVariant
+    ) -> dict[HashType, HashObject]:
+        return {
+            hash_type: hash_type.get_hash_function()()
+            for hash_type in variant.hashes
+            if hash_type in self._settings.check_hashes
+        }
+
+    @classmethod
+    async def _hash_file(
+        cls, path: Path, hashes: dict[HashType, HashObject]
+    ) -> int:
+        size = 0
+        with path.open("rb") as fp:
+            while chunk := fp.read(cls.BUFFER_SIZE):
+                size += len(chunk)
+                for hash_function in hashes.values():
+                    hash_function.update(chunk)
+                await asyncio.sleep(0)
+        return size
+
+    @staticmethod
+    def _check_hashes(
+        source_path: Path,
+        variant: DownloadFileCompressionVariant,
+        hashes: dict[HashType, HashObject],
+    ) -> None:
+        for hash_type, hash_function in hashes.items():
+            expected_hash = variant.hashes[hash_type].hash.lower()
+            calculated_hash = hash_function.hexdigest().lower()
+            if expected_hash != calculated_hash:
+                raise HashMismatchException(
+                    hash_type,
+                    source_path,
+                    expected_hash,
+                    calculated_hash,
+                )
+
     async def download_file(self, source_file: DownloadFile, target_root_path: Path):
         async def retry(
             message: str | None = None, sleep: bool = True, skip_try: bool = False
@@ -261,17 +325,77 @@ class Downloader(ABC):
 
             for source_path in variant.get_all_paths():
                 target_path = target_root_path / source_path
+                partial_path = self.get_partial_path(target_root_path, source_path)
+                mirror_paths = [
+                    target_root_path / path for path in variant.get_all_paths()
+                ]
 
                 tries = 10
                 while tries > 0:
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    partial_path.parent.mkdir(parents=True, exist_ok=True)
+
+                    resume_offset = 0
+                    if expected_size > 0 and partial_path.exists():
+                        partial_size = partial_path.stat().st_size
+                        if partial_size > expected_size:
+                            self._remove_partial(partial_path, target_root_path)
+                        elif partial_size == expected_size:
+                            hashes = self._new_hashes(variant)
+                            actual_size = await self._hash_file(partial_path, hashes)
+                            try:
+                                if actual_size != expected_size:
+                                    raise OSError(
+                                        "Partial file size changed while validating"
+                                    )
+                                self._check_hashes(source_path, variant, hashes)
+                            except (HashMismatchException, OSError) as ex:
+                                self._log.warning(
+                                    f"Discarding invalid completed partial file for"
+                                    f" {source_path}: {ex}"
+                                )
+                                self._remove_partial(partial_path, target_root_path)
+                                error = True
+                            else:
+                                os.replace(partial_path, target_path)
+                                self._prune_partial_directories(
+                                    partial_path, target_root_path
+                                )
+                                if mirror_paths:
+                                    self.link_or_copy(target_path, *mirror_paths)
+                                self._downloaded_count += 1
+                                self._downloaded.append(variant)
+                                self._missing_sources.difference_update(
+                                    variant.get_all_paths()
+                                )
+                                self._log.info(
+                                    f"Recovered completed partial file for"
+                                    f" {source_path}"
+                                )
+                                return
+                        elif partial_size > 0:
+                            resume_offset = partial_size
+                    elif partial_path.exists():
+                        # Files without a trusted expected size (for example a
+                        # mutable Release file) are deliberately restarted.
+                        self._remove_partial(partial_path, target_root_path)
+
                     async with (
                         self._settings.semaphore,
-                        self.stream(source_path) as response,
+                        self.stream(source_path, offset=resume_offset) as response,
                     ):
-                        target_path.parent.mkdir(parents=True, exist_ok=True)
-
                         if response.retry:
                             await retry(skip_try=True)
+                            continue
+
+                        if response.restart:
+                            self._remove_partial(partial_path, target_root_path)
+                            await retry(
+                                f"Server could not resume {source_path}"
+                                f" ({response.error}). Restarting from byte 0...",
+                                sleep=False,
+                            )
+                            error = True
                             continue
 
                         if response.missing:
@@ -304,6 +428,7 @@ class Downloader(ABC):
                             if source_file.ignore_errors:
                                 break
 
+                            self._remove_partial(partial_path, target_root_path)
                             await retry(
                                 f"Server reported size {response.size} differs from"
                                 f" expected size {expected_size} for file"
@@ -312,13 +437,10 @@ class Downloader(ABC):
                             error = True
                             continue
 
-                        mirror_paths = [
-                            target_root_path / path for path in variant.get_all_paths()
-                        ]
-
                         if response.size and not self.need_update(
                             target_path, response.size, response.date
                         ):
+                            self._remove_partial(partial_path, target_root_path)
                             self._unmodified_count += 1
                             self._unmodified_size += response.size
 
@@ -332,19 +454,49 @@ class Downloader(ABC):
 
                             return
 
+                        if response.start_offset not in (0, resume_offset):
+                            self._remove_partial(partial_path, target_root_path)
+                            await retry(
+                                f"Server returned unexpected resume offset"
+                                f" {response.start_offset} for {source_path};"
+                                " restarting...",
+                                sleep=False,
+                            )
+                            error = True
+                            continue
+
+                        append = response.start_offset > 0
+                        hashes = self._new_hashes(variant)
                         size = 0
-                        target_path.unlink(missing_ok=True)
+                        if append:
+                            try:
+                                size = await self._hash_file(partial_path, hashes)
+                            except FileNotFoundError:
+                                size = -1
+                            if size != response.start_offset:
+                                self._remove_partial(partial_path, target_root_path)
+                                await retry(
+                                    f"Partial file changed before resuming"
+                                    f" {source_path}; restarting...",
+                                    sleep=False,
+                                )
+                                error = True
+                                continue
+                            self._log.info(
+                                f"Resuming {source_path} at byte {size}"
+                            )
+                        elif resume_offset:
+                            self._log.info(
+                                f"Server ignored Range for {source_path};"
+                                " restarting from byte 0"
+                            )
+
+                        received_size = 0
+                        download_error: Exception | None = None
                         async with self._settings.aiofile_factory.open(
-                            target_path
+                            partial_path, append=append
                         ) as fp:
                             try:
-                                hashes: dict[HashType, HashObject] = {}
-                                for hash_type in variant.hashes:
-                                    if hash_type not in self._settings.check_hashes:
-                                        continue
-
-                                    hashes[hash_type] = hash_type.get_hash_function()()
-
                                 slow_rate_protector_factory = (
                                     self._settings.slow_rate_protector_factory
                                 )
@@ -363,54 +515,60 @@ class Downloader(ABC):
                                         )
 
                                     size += len(chunk)
+                                    received_size += len(chunk)
                                     slow_rate_protector.rate(len(chunk))
                                     await fp.write(chunk)
 
                                     for hash_function in hashes.values():
                                         hash_function.update(chunk)
 
-                                for hash_type, hash_function in hashes.items():
-                                    expected_hash = variant.hashes[
-                                        hash_type
-                                    ].hash.lower()
-                                    calculated_hash = hash_function.hexdigest().lower()
-
-                                    if expected_hash != calculated_hash:
-                                        raise HashMismatchException(
-                                            hash_type,
-                                            source_path,
-                                            expected_hash,
-                                            calculated_hash,
-                                        )
+                                self._check_hashes(source_path, variant, hashes)
 
                             except Exception as ex:  # pylint: disable=W0718
-                                await retry(
-                                    f"An error `{ex.__class__.__qualname__}: {ex}`"
-                                    f" occurred while downloading file {source_path}."
-                                    " Retrying..."
-                                )
-                                error = True
-                                continue
+                                download_error = ex
 
-                        if expected_size > 0 and expected_size != size:
+                        if download_error:
+                            if isinstance(download_error, HashMismatchException):
+                                self._remove_partial(partial_path, target_root_path)
                             await retry(
-                                f"Downloaded size {size} is differs from expected size"
-                                f" {expected_size} for file {source_path}. Retrying..."
+                                "An error "
+                                f"`{download_error.__class__.__qualname__}: "
+                                f"{download_error}` occurred while downloading file"
+                                f" {source_path}. Retrying..."
+                            )
+                            error = True
+                            continue
+
+                        final_expected_size = (
+                            expected_size if expected_size > 0 else response.size
+                        )
+                        if final_expected_size and final_expected_size != size:
+                            if size > final_expected_size:
+                                self._remove_partial(partial_path, target_root_path)
+                            await retry(
+                                f"Downloaded size {size} differs from expected size"
+                                f" {final_expected_size} for file"
+                                f" {source_path}. Retrying..."
                             )
                             error = True
                             continue
 
                         if response.date:
                             os.utime(
-                                target_path,
+                                partial_path,
                                 (response.date.timestamp(), response.date.timestamp()),
                             )
+
+                        os.replace(partial_path, target_path)
+                        self._prune_partial_directories(
+                            partial_path, target_root_path
+                        )
 
                         if mirror_paths:
                             self.link_or_copy(target_path, *mirror_paths)
 
                         self._downloaded_count += 1
-                        self._downloaded_size += size
+                        self._downloaded_size += received_size
 
                         self._downloaded.append(variant)
                         self._missing_sources.difference_update(variant.get_all_paths())
@@ -492,5 +650,7 @@ class Downloader(ABC):
 
     @asynccontextmanager
     @abstractmethod
-    async def stream(self, source_path: Path) -> AsyncGenerator[DownloadResponse, None]:
+    async def stream(
+        self, source_path: Path, offset: int = 0
+    ) -> AsyncGenerator[DownloadResponse, None]:
         yield  # type: ignore

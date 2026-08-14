@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -12,6 +13,10 @@ from ..response import DownloadResponse
 
 
 class HTTPDownloader(Downloader):
+    CONTENT_RANGE_PATTERN = re.compile(
+        r"^bytes (?P<start>\d+)-(?P<end>\d+)/(?P<total>\d+|\*)$"
+    )
+
     def __post_init__(self):
         auth = None
         if self._settings.url.username and self._settings.url.password:
@@ -83,21 +88,67 @@ class HTTPDownloader(Downloader):
         return func
 
     @asynccontextmanager
-    async def stream(self, source_path: Path):
+    async def stream(self, source_path: Path, offset: int = 0):
+        headers = {"Range": f"bytes={offset}-"} if offset else None
         try:
-            async with self._httpx.stream("GET", str(source_path)) as response:
+            async with self._httpx.stream(
+                "GET", str(source_path), headers=headers
+            ) as response:
                 date: datetime | None
                 try:
                     date = parsedate_to_datetime(  # type: ignore
                         response.headers.get("Last-Modified")
                     )
-                except ValueError:
+                except (TypeError, ValueError):
                     date = None
 
                 try:
                     size = int(response.headers.get("Content-Length"))
                 except (TypeError, ValueError):
                     size = None
+
+                if offset and response.status_code == 416:
+                    yield DownloadResponse(
+                        _stream=None,
+                        error=f"HTTP/{response.status_code}",
+                        restart=True,
+                    )
+                    return
+
+                start_offset = 0
+                if response.status_code == 206:
+                    content_range = response.headers.get("Content-Range", "")
+                    match = self.CONTENT_RANGE_PATTERN.fullmatch(content_range)
+                    if not match:
+                        yield DownloadResponse(
+                            _stream=None,
+                            error=(
+                                "HTTP/206 response has an invalid Content-Range: "
+                                f"{content_range!r}"
+                            ),
+                            restart=True,
+                        )
+                        return
+
+                    start_offset = int(match.group("start"))
+                    end_offset = int(match.group("end"))
+                    if start_offset != offset or end_offset < start_offset:
+                        yield DownloadResponse(
+                            _stream=None,
+                            error=(
+                                "HTTP/206 response starts at an unexpected byte: "
+                                f"requested {offset}, received {content_range!r}"
+                            ),
+                            restart=True,
+                        )
+                        return
+
+                    total = match.group("total")
+                    size = int(total) if total != "*" else None
+
+                # A HTTP/200 response to a Range request means that the server
+                # ignored Range. start_offset=0 tells the downloader to safely
+                # truncate the partial file and consume the complete response.
 
                 yield DownloadResponse(
                     missing=response.is_client_error,
@@ -109,6 +160,7 @@ class HTTPDownloader(Downloader):
                     date=date,  # type: ignore
                     size=size,
                     _stream=self.aiter_bytes(response),
+                    start_offset=start_offset,
                 )
 
         except httpx.RemoteProtocolError as ex:

@@ -35,7 +35,7 @@ class TestRepositoryMirror(IsolatedAsyncioTestCase):
             yield content
 
         @asynccontextmanager
-        async def stream(self, source_path: Path):
+        async def stream(self, source_path: Path, offset: int = 0):
             if source_path.name == "InRelease":
                 self._release_requests += 1
 

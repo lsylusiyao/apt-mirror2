@@ -31,6 +31,7 @@ VOLUME_FORMAT = "apt-mirror2-offline-volume"
 ACK_FORMAT = "apt-mirror2-offline-ack"
 REPAIR_FORMAT = "apt-mirror2-offline-repair"
 STATE_DIRECTORY = ".apt-mirror-offline"
+DOWNLOAD_PARTIAL_DIRECTORY = ".apt-mirror2-partial"
 BUFFER_SIZE = 4 * 1024 * 1024
 ACTION_REQUIRED = 3
 VOLUME_NAME_PATTERN = re.compile(r"^volume-[0-9]{4}$")
@@ -291,6 +292,8 @@ def build_manifest(
         current_path = Path(current)
         if current_path == root and STATE_DIRECTORY in directory_names:
             directory_names.remove(STATE_DIRECTORY)
+        if DOWNLOAD_PARTIAL_DIRECTORY in directory_names:
+            directory_names.remove(DOWNLOAD_PARTIAL_DIRECTORY)
         directory_names.sort()
         file_names.sort()
 

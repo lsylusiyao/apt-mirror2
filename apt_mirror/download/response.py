@@ -13,6 +13,8 @@ class DownloadResponse:
     date: datetime | None = None
     size: int | None = None
     retry: bool | None = None
+    start_offset: int = 0
+    restart: bool = False
 
     def stream(self) -> AsyncIterator[bytes]:
         if not self._stream:

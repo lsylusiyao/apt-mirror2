@@ -35,7 +35,7 @@ class FTPDownloader(Downloader):
         return func
 
     @asynccontextmanager
-    async def stream(self, source_path: Path):
+    async def stream(self, source_path: Path, offset: int = 0):
         try:
             async with aioftp.Client.context(  # type: ignore
                 self._settings.url.hostname,

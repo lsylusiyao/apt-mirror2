@@ -680,6 +680,7 @@ class APTMirror:
 
     def __init__(self, config: Config) -> None:
         self.stopped = False
+        self.stop_signal: int | None = None
 
         self._log = LoggerFactory.get_logger(self)
         self._config = config
@@ -705,15 +706,18 @@ class APTMirror:
                 self._config.prometheus_host, self._config.prometheus_port
             )
 
-    def on_stop(self):
+    def on_stop(self, signum: int):
         self.stopped = True
+        self.stop_signal = signum
         self._metrics_collector.shutdown()
         asyncio.get_running_loop().stop()
 
     async def run(self) -> int:
         self._log.info(f"apt-mirror2 version {__version__}")
         for signum in (signal.SIGINT, signal.SIGTERM):
-            asyncio.get_running_loop().add_signal_handler(signum, self.on_stop)
+            asyncio.get_running_loop().add_signal_handler(
+                signum, self.on_stop, signum
+            )
 
         if not self._config.repositories:
             self._log.error("No repositories are found in the configuration")
@@ -947,8 +951,11 @@ def main() -> int:
         return asyncio.run(apt_mirror.run())
     except (RuntimeError, KeyboardInterrupt) as ex:
         if apt_mirror.stopped:
-            LOG.info("Stopped")
-            return 0
+            signum = apt_mirror.stop_signal or signal.SIGINT
+            LOG.info(
+                "Stopped; completed files and resumable partials were retained"
+            )
+            return 128 + signum
 
         LOG.exception(ex)
         return 1

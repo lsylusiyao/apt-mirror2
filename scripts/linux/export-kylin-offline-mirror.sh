@@ -70,12 +70,10 @@ if [[ ! -d $media_root || ! -w $media_root ]]; then
     exit 73
 fi
 
-if command -v apt-mirror-offline >/dev/null 2>&1; then
-    offline_cli=(apt-mirror-offline)
-elif python3 -c 'import apt_mirror.offline' >/dev/null 2>&1; then
+if python3 -c 'import apt_mirror.offline' >/dev/null 2>&1; then
     offline_cli=(python3 -m apt_mirror.offline)
 else
-    echo 'apt-mirror-offline is not installed for Python 3.' >&2
+    echo 'The current apt-mirror-offline module is not installed for Python 3.' >&2
     exit 69
 fi
 
@@ -84,16 +82,32 @@ if [[ $skip_online_sync -eq 0 ]]; then
         echo "apt-mirror config does not exist: $mirror_config" >&2
         exit 66
     fi
-    if command -v apt-mirror >/dev/null 2>&1; then
-        mirror_cli=(apt-mirror)
-    elif command -v apt-mirror2 >/dev/null 2>&1; then
-        mirror_cli=(apt-mirror2)
+    if python3 -c 'from apt_mirror.download.downloader import Downloader; assert Downloader.PARTIAL_DIRECTORY == ".apt-mirror2-partial"' >/dev/null 2>&1; then
+        mirror_cli=(python3 -m apt_mirror)
     else
-        echo 'apt-mirror is not installed.' >&2
+        echo 'The resume-enabled version of this project is not installed for Python 3.' >&2
+        echo 'Install/update this checkout and its online dependencies before synchronizing.' >&2
         exit 69
     fi
-    echo 'Synchronizing archive.kylinos.cn...'
-    "${mirror_cli[@]}" "$mirror_config"
+    resume_notice() {
+        sync || true
+        echo 'Online synchronization did not finish; no offline bundle was created.' >&2
+        echo 'Completed files and HTTP partial downloads were retained.' >&2
+        echo 'Rerun this script with the same config and mirror paths to continue.' >&2
+    }
+    trap 'resume_notice; exit 130' INT
+    trap 'resume_notice; exit 143' TERM
+    echo 'Synchronizing archive.kylinos.cn (an interrupted rerun resumes HTTP partials)...'
+    if "${mirror_cli[@]}" "$mirror_config"; then
+        sync_status=0
+    else
+        sync_status=$?
+    fi
+    trap - INT TERM
+    if [[ $sync_status -ne 0 ]]; then
+        resume_notice
+        exit "$sync_status"
+    fi
 fi
 
 mkdir -p "$media_root/feedback" "$media_root/outgoing" "$state_dir"

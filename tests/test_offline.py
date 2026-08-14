@@ -166,6 +166,33 @@ class TestOfflineMirror(TestCase):
             import_bundle(bundle, self.internal, delete_policy="apply")
         self.assertFalse((self.internal / "pool" / "a.deb").exists())
 
+    def test_export_ignores_resumable_download_partials(self):
+        (self.source / "pool" / "a.deb").write_bytes(b"complete")
+        partial = (
+            self.source
+            / "archive.kylinos.cn"
+            / ".apt-mirror2-partial"
+            / "pool"
+            / "large.deb"
+        )
+        partial.parent.mkdir(parents=True)
+        partial.write_bytes(b"incomplete")
+
+        bundle = self.root / "bundle"
+        metadata = export_bundle(
+            self.source, bundle, self.state, rehash_source=True
+        )
+
+        self.assertEqual(metadata["changed_file_count"], 1)
+        self.assertEqual(
+            {
+                path
+                for volume in metadata["volumes"]
+                for path in volume["files"]
+            },
+            {"pool/a.deb"},
+        )
+
     def test_optical_volumes_can_be_staged_separately(self):
         (self.source / "pool" / "a.deb").write_bytes(b"12345678")
         (self.source / "pool" / "b.deb").write_bytes(b"abcdefgh")

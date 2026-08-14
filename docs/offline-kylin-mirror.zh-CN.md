@@ -46,7 +46,9 @@ grep -RhE '^(deb|Suites:|Architectures:)' /etc/apt/sources.list /etc/apt/sources
 ## 一、共同准备与架构选择
 
 1. 在联网 Linux 或 Windows 的 WSL2 中安装 Python 3.10+、本项目及在线同步
-   依赖。Windows 示例的 WSL 发行版名为 `Ubuntu`。
+   依赖。Windows 示例的 WSL 发行版名为 `Ubuntu`。更新本仓库代码后要重新安装
+   当前 checkout；导出脚本会检查 WSL/Linux 的 Python 实际加载了支持续传的版本，
+   避免误调用系统中的旧 `apt-mirror`。
 2. 把 [mirror-amd64.list](../examples/kylin/mirror-amd64.list) 复制为
    `/etc/apt/mirror-kylin.list`，按目标系统修改唯一的架构和 suite。
 3. 先只配置一个 suite 和一种架构做小范围验证，再开始正式同步：
@@ -131,6 +133,22 @@ sudo ./scripts/linux/with-kylin-offline-vhdx.sh \
 联网端日常会按大小和纳秒级修改时间复用哈希。定期使用
 `-RehashSource`/`--rehash-source` 可强制重读源镜像，排查源盘静默位翻转；
 内网导入端每轮始终做完整 SHA-256 校验。
+
+### 下载中断与断点续传
+
+上述 PowerShell 和 Bash 导出脚本都是可重入的最终入口。网络错误、速度过慢或
+按 `Ctrl+C` 中止时，脚本不会创建离线 bundle，也不会删除已经完成的文件；未
+完成的 HTTP 文件保存在各仓库根下的 `.apt-mirror2-partial` 隐藏目录。使用
+**完全相同的配置、`MirrorRoot`/`--mirror-root` 和磁盘挂载位置**重新运行原命令
+即可继续，不要删除 `mirror_path`、`skel_path`、`var_path`，也不要在尚未完成时
+使用 `-SkipOnlineSync`/`--skip-online-sync`。
+
+恢复请求使用标准 HTTP `Range: bytes=N-`。服务器返回 `206` 时从已有字节追加；
+若服务器忽略 Range 并返回 `200`，只会从头重下当前文件，之前已经完成的其他
+文件仍然复用。没有可信预期大小的易变 Release 文件会安全地从头下载，通常很小；
+有 Release 大小和哈希的索引、`.deb` 等大文件可真正续传。文件完成后会验证总
+大小及配置启用的仓库哈希，再原子替换正式文件；错误内容不会覆盖现有可用文件。
+断点目录不会进入离线 bundle。
 
 ## 三、传输硬盘与动态 VHDX
 

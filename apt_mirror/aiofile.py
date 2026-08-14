@@ -15,8 +15,6 @@ class AsyncSupportsWrite(Protocol):
 
 
 class BaseAsyncIOFileWriterFactory(ABC):
-    MODE = "wb"
-
     def __init__(self) -> None:
         self._log = LoggerFactory.get_logger(self)
 
@@ -32,7 +30,9 @@ class BaseAsyncIOFileWriterFactory(ABC):
 
     @asynccontextmanager
     @abstractmethod
-    async def open(self, path: Path) -> AsyncIterator[AsyncSupportsWrite]:
+    async def open(
+        self, path: Path, *, append: bool = False
+    ) -> AsyncIterator[AsyncSupportsWrite]:
         yield  # type: ignore
 
 
@@ -75,8 +75,11 @@ try:
         async def _open(
             self,
             path: Path,
+            *,
+            append: bool = False,
         ):
-            yield await aiofile_open(path, mode=self.MODE, context=self._context)
+            mode = "ab" if append else "wb"
+            yield await aiofile_open(path, mode=mode, context=self._context)
 
         async def test_storage(self, *test_paths: Path) -> None:
             for path in test_paths:
@@ -101,8 +104,10 @@ try:
                         path.unlink(missing_ok=True)
 
         @asynccontextmanager
-        async def open(self, path: Path) -> AsyncIterator[AsyncSupportsWrite]:
-            async with self._open(path) as fd:
+        async def open(
+            self, path: Path, *, append: bool = False
+        ) -> AsyncIterator[AsyncSupportsWrite]:
+            async with self._open(path, append=append) as fd:
                 yield fd
 
 except ImportError:
@@ -123,6 +128,9 @@ except ImportError:
 
     class AsyncIOFileFactory(BaseAsyncIOFileWriterFactory):
         @asynccontextmanager
-        async def open(self, path: Path) -> AsyncIterator[AsyncSupportsWrite]:
-            async with aiofiles_open(path, self.MODE) as fd:
+        async def open(
+            self, path: Path, *, append: bool = False
+        ) -> AsyncIterator[AsyncSupportsWrite]:
+            mode = "ab" if append else "wb"
+            async with aiofiles_open(path, mode) as fd:
                 yield AIOFilesWriter(fd)
