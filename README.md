@@ -139,6 +139,9 @@ upstream deletions. Interrupted HTTP package downloads persist in a separate
 partial area and resume with Range requests when the same command is rerun. See the
 [Chinese deployment guide](docs/offline-kylin-mirror.zh-CN.md) and the
 [`archive.kylinos.cn` amd64 example](examples/kylin/mirror-amd64.list).
+For an nginx-based air-gapped container that can import, verify, and serve the
+mirror from a bind-mounted directory or VHDX, see the
+[Chinese Docker deployment guide](docs/docker-kylin-offline.zh-CN.md).
 
 # apt-mirror compatibility
 

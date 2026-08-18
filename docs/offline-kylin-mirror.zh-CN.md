@@ -400,12 +400,18 @@ SHA-256 能检测介质和存储的意外损坏，但不能抵抗能够同时篡
 ## 八、给内网客户端提供服务
 
 示例导出的是 `/var/spool/apt-mirror/mirror`，因此内网目录会保留
-`archive.kylinos.cn/kylin/KYLIN-ALL` 层级。让 nginx/Apache 的文档根指向
-`/srv/apt-mirror` 后，客户端源可写为：
+`archive.kylinos.cn/kylin/KYLIN-ALL` 层级。为了不在客户端源中重复上游域名，
+让 nginx/Apache 的文档根指向 `/srv/apt-mirror/archive.kylinos.cn`，客户端源写为：
 
 ```text
-deb http://apt-mirror.intra/archive.kylinos.cn/kylin/KYLIN-ALL 10.1-2203-updates main restricted universe multiverse
+deb http://apt-mirror.intra/kylin/KYLIN-ALL 10.1-2203-updates main restricted universe multiverse
 ```
 
 替换主机名、suite 和架构相关配置后，先在一台测试客户端执行 `apt update`，
 再推广到生产内网。
+
+若希望把 nginx、离线导入/校验工具和 VHDX 支持封装为一个可搬入内网的 Docker
+镜像，请参阅 [Docker 完全离线部署指南](docker-kylin-offline.zh-CN.md)。该方案
+既支持把宿主机已挂载的目录映射给容器，也支持在 Linux 特权容器内直接挂载映射
+到容器根目录的 `.vhdx` 文件；其 nginx 默认隐藏磁盘中的
+`archive.kylinos.cn` 目录层级，客户端源可直接使用 `/kylin/KYLIN-ALL`。
