@@ -1,4 +1,6 @@
+import contextlib
 import hashlib
+import io
 import json
 import shutil
 import uuid
@@ -28,6 +30,25 @@ class TestOfflineMirror(TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_export_reports_progress(self):
+        (self.source / "pool" / "a.deb").write_bytes(b"alpha")
+        (self.source / "pool" / "b.deb").write_bytes(b"bravo")
+
+        bundle = self.root / "bundle"
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(stderr):
+            export_bundle(
+                self.source,
+                bundle,
+                self.state,
+                rehash_source=True,
+                show_progress=True,
+            )
+        output = stderr.getvalue()
+        self.assertIn("Scanning source mirror and computing hashes", output)
+        self.assertIn("Copying verified payloads", output)
+        self.assertIn("100%", output)
 
     def test_stored_paths_are_encoded_for_windows_media(self):
         unsafe_path = "pool/dep:1.deb"

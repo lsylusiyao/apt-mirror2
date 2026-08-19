@@ -299,6 +299,41 @@ def _write_json_atomic(path: Path, value: Any) -> None:
     _write_bytes_atomic(path, _json_bytes(value))
 
 
+def _format_bytes(size: int) -> str:
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    value = float(size)
+    index = 0
+    while value >= 1024 and index < len(units) - 1:
+        value /= 1024
+        index += 1
+    if index == 0:
+        return f"{size} B"
+    return f"{value:.1f} {units[index]}"
+
+
+@dataclass
+class ProgressReporter:
+    total_files: int
+    total_bytes: int
+    stream: Any | None = None
+    last_bucket: int = -1
+
+    def note(self, message: str) -> None:
+        print(message, file=self.stream if self.stream is not None else sys.stderr, flush=True)
+
+    def advance(self, completed_files: int, completed_bytes: int) -> None:
+        if self.total_files <= 0:
+            return
+        percent = min(100, completed_files * 100 // self.total_files)
+        bucket = 100 if percent == 100 else percent // 2 * 2
+        if bucket != self.last_bucket or completed_files == self.total_files:
+            self.last_bucket = bucket
+            self.note(
+                f"  {percent:3d}% ({completed_files}/{self.total_files} files, "
+                f"{_format_bytes(completed_bytes)}/{_format_bytes(self.total_bytes)})"
+            )
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     try:
         with path.open("rt", encoding="utf-8") as file:
@@ -515,6 +550,7 @@ def export_bundle(
     feedback_dir: Path | None = None,
     volume_size: int = 0,
     rehash_source: bool = False,
+    show_progress: bool = False,
 ) -> dict[str, Any]:
     source = source.resolve()
     state_resolved = state_dir.resolve(strict=False)
@@ -531,6 +567,8 @@ def export_bundle(
     repair_paths = _load_feedback(state_dir, feedback_dir)
     accepted_path = state_dir / "accepted-manifest.json"
     base = load_manifest(accepted_path) if accepted_path.is_file() else None
+    if show_progress:
+        print("Scanning source mirror and computing hashes...", file=sys.stderr, flush=True)
     target = build_manifest(source, state_dir / "hash-cache.json", rehash_source)
 
     base_files = base.by_path if base else {}
@@ -544,6 +582,19 @@ def export_bundle(
         entry for path, entry in sorted(base_files.items()) if path not in target_files
     ]
     partitions = _partition_volumes(changed, volume_size)
+    progress = (
+        ProgressReporter(len(changed), sum(entry.size for entry in changed))
+        if show_progress
+        else None
+    )
+    if progress is not None:
+        if changed:
+            progress.note(
+                f"Copying verified payloads: {len(changed)} file(s), "
+                f"{_format_bytes(progress.total_bytes)} across {len(partitions)} volume(s)."
+            )
+        else:
+            progress.note("No payload files changed; writing metadata only.")
     bundle_id = (
         datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         + f"-{target.snapshot_id[:12]}-{uuid.uuid4().hex[:8]}"
@@ -592,6 +643,8 @@ def export_bundle(
         _write_bytes_atomic(partial / "manifest.json", manifest_bytes)
         _write_bytes_atomic(partial / "bundle.json", metadata_bytes)
 
+        copied_files = 0
+        copied_bytes = 0
         for description, entries, stored_entries in zip(
             volume_descriptions, partitions, volume_entries, strict=True
         ):
@@ -616,6 +669,10 @@ def export_bundle(
                     _path(volume_root / "payload", stored_entry.stored_path),
                     entry,
                 )
+                copied_files += 1
+                copied_bytes += entry.size
+                if progress is not None:
+                    progress.advance(copied_files, copied_bytes)
             _write_bytes_atomic(volume_root / "READY", b"ready\n")
 
         _write_bytes_atomic(partial / "READY", b"ready\n")
@@ -1163,6 +1220,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.feedback_dir,
                 args.volume_size,
                 args.rehash_source,
+                show_progress=True,
             )
             return 0
         if args.command == "stage":
