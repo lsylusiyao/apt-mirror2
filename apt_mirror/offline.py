@@ -82,6 +82,53 @@ class FileEntry:
 
 
 @dataclass(frozen=True)
+class VolumeFileEntry:
+    path: str
+    stored_path: str
+    size: int
+    sha256: str
+
+    @classmethod
+    def from_dict(cls, value: Any) -> "VolumeFileEntry":
+        if not isinstance(value, dict):
+            raise OfflineError("Invalid volume file entry")
+
+        try:
+            path = _validated_relative_path(value["path"])
+            size = int(value["size"])
+            digest = str(value["sha256"]).lower()
+        except (KeyError, TypeError, ValueError) as ex:
+            raise OfflineError("Invalid volume file entry") from ex
+
+        stored_path_value = value.get("stored_path")
+        if stored_path_value is None:
+            if not _windows_exfat_safe_relative_path(path):
+                raise OfflineError(f"Missing stored path for unsafe volume entry: {path}")
+            stored_path = path
+        else:
+            stored_path = _validated_relative_path(stored_path_value)
+            if _stored_relative_path(path) != stored_path:
+                raise OfflineError(f"Invalid stored path for {path}")
+
+        if size < 0 or len(digest) != 64:
+            raise OfflineError(f"Invalid size or SHA256 for {path}")
+        try:
+            bytes.fromhex(digest)
+        except ValueError as ex:
+            raise OfflineError(f"Invalid SHA256 for {path}") from ex
+
+        return cls(path=path, stored_path=stored_path, size=size, sha256=digest)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "path": self.path,
+            "stored_path": self.stored_path,
+            "size": self.size,
+            "sha256": self.sha256,
+        }
+
+
+@dataclass(frozen=True)
 class Manifest:
     snapshot_id: str
     created_at: str
@@ -139,16 +186,50 @@ def _validated_relative_path(value: Any) -> str:
         raise OfflineError(f"Unsafe relative path: {value!r}")
 
     normalized = path.as_posix()
-    for part in path.parts:
-        if (
-            any(character in '<>:"|?*' or ord(character) < 32 for character in part)
-            or part.endswith((" ", "."))
-            or part.split(".", maxsplit=1)[0].casefold() in WINDOWS_RESERVED_NAMES
-        ):
-            raise OfflineError(f"Path cannot be stored on Windows/exFAT media: {value!r}")
     if normalized == STATE_DIRECTORY or normalized.startswith(f"{STATE_DIRECTORY}/"):
         raise OfflineError(f"Reserved relative path: {value!r}")
     return normalized
+
+
+def _is_windows_exfat_safe_component(part: str) -> bool:
+    return (
+        part
+        and part not in (".", "..")
+        and not any(character in '<>:"|?*\x00' or ord(character) < 32 for character in part)
+        and not part.endswith((" ", "."))
+        and part.split(".", maxsplit=1)[0].casefold() not in WINDOWS_RESERVED_NAMES
+    )
+
+
+def _windows_exfat_safe_relative_path(value: str) -> bool:
+    try:
+        path = PurePosixPath(_validated_relative_path(value))
+    except OfflineError:
+        return False
+    return all(_is_windows_exfat_safe_component(part) for part in path.parts)
+
+
+def _stored_path_component(part: str) -> str:
+    if _is_windows_exfat_safe_component(part) and "%" not in part:
+        return part
+    if part.endswith((" ", ".")) or part.split(".", maxsplit=1)[0].casefold() in WINDOWS_RESERVED_NAMES:
+        encoded = "".join(f"%{byte:02X}" for byte in part.encode("utf-8"))
+    else:
+        pieces: list[str] = []
+        for character in part:
+            if character == "%" or ord(character) < 32 or character in '<>:"|?*':
+                pieces.append("".join(f"%{byte:02X}" for byte in character.encode("utf-8")))
+            else:
+                pieces.append(character)
+        encoded = "".join(pieces)
+    if len(encoded) > 240:
+        encoded = "~" + hashlib.sha256(part.encode("utf-8")).hexdigest()
+    return encoded
+
+
+def _stored_relative_path(value: str) -> str:
+    path = PurePosixPath(_validated_relative_path(value))
+    return "/".join(_stored_path_component(part) for part in path.parts)
 
 
 def _path(root: Path, relative: str) -> Path:
@@ -476,6 +557,18 @@ def export_bundle(
         }
         for index, entries in enumerate(partitions, start=1)
     ]
+    volume_entries = [
+        [
+            VolumeFileEntry(
+                path=entry.path,
+                stored_path=_stored_relative_path(entry.path),
+                size=entry.size,
+                sha256=entry.sha256,
+            )
+            for entry in entries
+        ]
+        for entries in partitions
+    ]
 
     partial = bundle.with_name(f".{bundle.name}.{uuid.uuid4().hex}.partial")
     try:
@@ -499,7 +592,9 @@ def export_bundle(
         _write_bytes_atomic(partial / "manifest.json", manifest_bytes)
         _write_bytes_atomic(partial / "bundle.json", metadata_bytes)
 
-        for description, entries in zip(volume_descriptions, partitions, strict=True):
+        for description, entries, stored_entries in zip(
+            volume_descriptions, partitions, volume_entries, strict=True
+        ):
             volume_root = partial / "volumes" / description["name"]
             volume_root.mkdir(parents=True)
             volume_metadata = {
@@ -510,15 +605,15 @@ def export_bundle(
                 "volume_count": len(partitions),
                 "bundle_sha256": hashlib.sha256(metadata_bytes).hexdigest(),
                 "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
-                "files": [entry.as_dict() for entry in entries],
+                "files": [entry.as_dict() for entry in stored_entries],
             }
             _write_bytes_atomic(volume_root / "bundle.json", metadata_bytes)
             _write_bytes_atomic(volume_root / "manifest.json", manifest_bytes)
             _write_json_atomic(volume_root / "volume.json", volume_metadata)
-            for entry in entries:
+            for entry, stored_entry in zip(entries, stored_entries, strict=True):
                 _copy_verified(
                     _path(source, entry.path),
-                    _path(volume_root / "payload", entry.path),
+                    _path(volume_root / "payload", stored_entry.stored_path),
                     entry,
                 )
             _write_bytes_atomic(volume_root / "READY", b"ready\n")
@@ -616,12 +711,12 @@ def _validate_volume(
     if not isinstance(raw_files, list):
         raise OfflineError(f"Volume has no file list: {volume_root}")
     target_files = manifest.by_path
-    entries = [FileEntry.from_dict(value) for value in raw_files]
+    entries = [VolumeFileEntry.from_dict(value) for value in raw_files]
     for entry in entries:
-        if target_files.get(entry.path) != entry:
+        if target_files.get(entry.path) != FileEntry(entry.path, entry.size, entry.sha256):
             raise OfflineError(f"Volume entry is absent from target manifest: {entry.path}")
         if verify_payload:
-            payload = _path(volume_root / "payload", entry.path)
+            payload = _path(volume_root / "payload", entry.stored_path)
             if not payload.is_file() or payload.stat().st_size != entry.size:
                 raise OfflineError(f"Payload is missing or truncated: {entry.path}")
             if _sha256(payload) != entry.sha256:
@@ -911,13 +1006,14 @@ def import_bundle(
         volume_root = bundle / "volumes" / volume_name
         volume = _read_json(volume_root / "volume.json")
         for raw_entry in volume["files"]:
-            entry = FileEntry.from_dict(raw_entry)
-            if target_files.get(entry.path) != entry:
+            entry = VolumeFileEntry.from_dict(raw_entry)
+            file_entry = FileEntry(entry.path, entry.size, entry.sha256)
+            if target_files.get(entry.path) != file_entry:
                 raise OfflineError(f"Payload entry does not match manifest: {entry.path}")
             _copy_verified(
-                _path(volume_root / "payload", entry.path),
+                _path(volume_root / "payload", entry.stored_path),
                 _path(destination, entry.path),
-                entry,
+                file_entry,
             )
 
     issues = verify_snapshot(destination, manifest)

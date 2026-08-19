@@ -1,8 +1,11 @@
+import hashlib
 import json
 import shutil
-import tempfile
+import uuid
 from pathlib import Path
 from unittest import TestCase
+
+import apt_mirror.offline as offline
 
 from apt_mirror.offline import (
     OfflineError,
@@ -15,8 +18,8 @@ from apt_mirror.offline import (
 
 class TestOfflineMirror(TestCase):
     def setUp(self):
-        self.temporary_directory = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary_directory.name)
+        self.root = Path(f".test-offline-{uuid.uuid4().hex}")
+        self.root.mkdir()
         self.source = self.root / "source"
         self.state = self.root / "state"
         self.feedback = self.root / "feedback"
@@ -24,7 +27,79 @@ class TestOfflineMirror(TestCase):
         (self.source / "pool").mkdir(parents=True)
 
     def tearDown(self):
-        self.temporary_directory.cleanup()
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_stored_paths_are_encoded_for_windows_media(self):
+        unsafe_path = "pool/dep:1.deb"
+        payload = b"alpha"
+        digest = hashlib.sha256(payload).hexdigest()
+        stored_path = offline._stored_relative_path(unsafe_path)
+        entry = offline.FileEntry(unsafe_path, len(payload), digest)
+        manifest = {
+            "format": offline.MANIFEST_FORMAT,
+            "version": offline.FORMAT_VERSION,
+            "snapshot_id": offline._snapshot_id((entry,)),
+            "created_at": "2026-08-19T00:00:00+00:00",
+            "hash": "sha256",
+            "file_count": 1,
+            "total_bytes": len(payload),
+            "files": [entry.as_dict()],
+        }
+        manifest_bytes = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
+        bundle_metadata = {
+            "format": offline.BUNDLE_FORMAT,
+            "version": offline.FORMAT_VERSION,
+            "bundle_id": "20260819T000000Z-0123456789ab-abcdef12",
+            "created_at": "2026-08-19T00:00:00+00:00",
+            "base_snapshot_id": None,
+            "target_snapshot_id": manifest["snapshot_id"],
+            "manifest_sha256": hashlib.sha256((manifest_bytes + "\n").encode("utf-8")).hexdigest(),
+            "changed_file_count": 1,
+            "deleted_file_count": 0,
+            "payload_bytes": len(payload),
+            "deleted": [],
+            "volumes": [
+                {
+                    "name": "volume-0001",
+                    "file_count": 1,
+                    "payload_bytes": len(payload),
+                    "files": [unsafe_path],
+                }
+            ],
+        }
+        bundle_bytes = json.dumps(bundle_metadata, ensure_ascii=False, indent=2, sort_keys=True)
+        volume_entry = offline.VolumeFileEntry(unsafe_path, stored_path, len(payload), digest)
+        volume_metadata = {
+            "format": offline.VOLUME_FORMAT,
+            "version": offline.FORMAT_VERSION,
+            "bundle_id": bundle_metadata["bundle_id"],
+            "name": "volume-0001",
+            "volume_count": 1,
+            "bundle_sha256": hashlib.sha256((bundle_bytes + "\n").encode("utf-8")).hexdigest(),
+            "manifest_sha256": hashlib.sha256((manifest_bytes + "\n").encode("utf-8")).hexdigest(),
+            "files": [volume_entry.as_dict()],
+        }
+
+        bundle = self.root / "bundle"
+        volume_root = bundle / "volumes" / "volume-0001"
+        (volume_root / "payload" / "pool").mkdir(parents=True)
+        (bundle / "READY").write_bytes(b"ready\n")
+        (bundle / "bundle.json").write_bytes((bundle_bytes + "\n").encode("utf-8"))
+        (bundle / "manifest.json").write_bytes((manifest_bytes + "\n").encode("utf-8"))
+        (volume_root / "READY").write_bytes(b"ready\n")
+        (volume_root / "bundle.json").write_bytes((bundle_bytes + "\n").encode("utf-8"))
+        (volume_root / "manifest.json").write_bytes((manifest_bytes + "\n").encode("utf-8"))
+        (volume_root / "volume.json").write_bytes(
+            (json.dumps(volume_metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        )
+        (volume_root / "payload" / stored_path).write_bytes(payload)
+
+        staged_root = self.root / "staged"
+        destination, complete = stage_volumes(bundle, staged_root)
+        self.assertTrue(complete)
+        self.assertTrue((destination / "volumes" / "volume-0001" / "payload" / stored_path).is_file())
+        self.assertFalse(offline._windows_exfat_safe_relative_path(unsafe_path))
+        self.assertEqual(stored_path, "pool/dep%3A1.deb")
 
     def test_incremental_delete_and_corruption_repair(self):
         (self.source / "pool" / "a.deb").write_bytes(b"alpha")
