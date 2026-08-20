@@ -50,7 +50,6 @@ ENV PATH="/opt/venv/bin:/opt/apt-mirror2/scripts/linux:${PATH}" \
     KYLIN_MIRROR_NBD="/dev/nbd0" \
     KYLIN_MIRROR_PARTITION="/dev/nbd0p2" \
     KYLIN_MIRROR_SUBDIR="mirror" \
-    KYLIN_PUBLIC_SUBDIR="archive.kylinos.cn" \
     KYLIN_TRANSFER_MOUNT="/mnt/kylin-transfer" \
     KYLIN_TRANSFER_NBD="/dev/nbd1" \
     KYLIN_TRANSFER_PARTITION="/dev/nbd1p1"

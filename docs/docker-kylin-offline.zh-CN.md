@@ -32,9 +32,9 @@ docker save -o kylin-offline-mirror.tar kylin-offline-mirror:local
 docker load -i kylin-offline-mirror.tar
 ```
 
-镜像的默认命令是启动 nginx，默认监听容器 `80` 端口。nginx 会自动跳过磁盘上
-的 `archive.kylinos.cn` 这一层，因此客户端 URL 中不需要出现上游域名。建议先
-采用下一节的目录映射；它不需要给容器内核级权限，也适用于 Docker Desktop。
+镜像的默认命令是启动 nginx，默认监听容器 `80` 端口。nginx 直接发布镜像根，
+客户端 URL 延用包含 `archive.kylinos.cn` 的原有层级。建议先采用下一节的目录
+映射；它不需要给容器内核级权限，也适用于 Docker Desktop。
 
 ## 二、推荐方式：宿主机挂载磁盘，容器映射目录
 
@@ -82,8 +82,8 @@ test -b /dev/nbd0 && test -b /dev/nbd1
 
 以下命令把目标数据盘和传输盘分别放到容器根目录
 `/kylin-target.vhdx`、`/kylin-transfer.vhdx`。入口脚本把它们挂到
-`/mnt/kylin-mirror`、`/mnt/kylin-transfer`。nginx 发布目标盘内
-`mirror/archive.kylinos.cn` 的内容：
+`/mnt/kylin-mirror`、`/mnt/kylin-transfer`。nginx 发布目标盘内的 `mirror`
+目录，客户端通过 URL 中的 `archive.kylinos.cn` 层级访问其内容：
 
 ```bash
 docker run -d \
@@ -121,7 +121,6 @@ docker run -d \
 | `KYLIN_MIRROR_PARTITION` | `/dev/nbd0p2` | 目标 VHDX 的分区设备路径；也兼容填写分区号（如 `1`） |
 | `KYLIN_MIRROR_MOUNT` | `/mnt/kylin-mirror` | 目标 VHDX 挂载点 |
 | `KYLIN_MIRROR_SUBDIR` | `mirror` | 挂载文件系统内的镜像相对路径 |
-| `KYLIN_PUBLIC_SUBDIR` | `archive.kylinos.cn` | nginx 相对镜像根下移的目录；设为 `.` 可恢复旧 URL 层级 |
 | `KYLIN_TRANSFER_NBD` | `/dev/nbd1` | 传输 VHDX 的 NBD 设备 |
 | `KYLIN_TRANSFER_PARTITION` | `/dev/nbd1p1` | 传输 VHDX 的分区设备路径；也兼容填写分区号 |
 | `KYLIN_TRANSFER_MOUNT` | `/mnt/kylin-transfer` | 传输 VHDX 挂载点 |
@@ -129,6 +128,11 @@ docker run -d \
 如果宿主机分配的 NBD 设备不同，需要同时设置设备和对应的分区路径。例如使用
 `/dev/nbd2` 的第二分区时，增加 `-e KYLIN_MIRROR_NBD=/dev/nbd2` 和
 `-e KYLIN_MIRROR_PARTITION=/dev/nbd2p2`。两项必须指向同一个 NBD 设备。
+
+部分 Docker 宿主机虽然能在 `lsblk` 中看到分区，却不会在容器的 `/dev` 下创建分区
+节点。入口脚本会在连接 VHDX 后执行 `partprobe` 和 `blockdev --rereadpt`，并在需要
+时根据 `/sys/class/block` 中的主次设备号用 `mknod` 创建分区节点；容器需要使用
+`--privileged` 才能完成这一步。
 
 不要让同一个 VHDX 同时被宿主机、另一个容器或虚拟机以读写方式挂载。正常使用
 `docker stop -t 30 kylin-mirror` 停止容器；入口脚本会先同步、卸载文件系统并断开
@@ -243,12 +247,12 @@ docker run --rm -it \
 
 ## 五、麒麟客户端配置
 
-nginx 默认发布最终镜像根中的 `archive.kylinos.cn` 子目录，且拒绝访问以点开头
-的内部状态/断点目录。假设 Docker 宿主机内网地址为 `192.168.10.20`、端口映射
-为 `8080`，客户端源不再包含 `archive.kylinos.cn`：
+nginx 默认直接发布最终镜像根，且拒绝访问以点开头的内部状态/断点目录。假设
+Docker 宿主机内网地址为 `192.168.10.20`、端口映射为 `8080`，客户端源延用
+包含 `archive.kylinos.cn` 的原有层级：
 
 ```text
-deb http://192.168.10.20:8080/kylin/KYLIN-ALL 10.1-2203-updates main restricted universe multiverse
+deb http://192.168.10.20:8080/archive.kylinos.cn/kylin/KYLIN-ALL 10.1-2203-updates main restricted universe multiverse
 ```
 
 suite 和架构要与实际麒麟系统一致。先执行：
@@ -261,7 +265,7 @@ sudo apt update
 
 ```bash
 docker exec kylin-mirror \
-  find /var/www/kylin-mirror/kylin/KYLIN-ALL/dists \
+  find /var/www/kylin-mirror/archive.kylinos.cn/kylin/KYLIN-ALL/dists \
   -maxdepth 2 -name Release -print
 ```
 

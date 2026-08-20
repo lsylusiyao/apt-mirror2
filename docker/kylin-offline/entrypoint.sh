@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 declare -a mounted_points=()
 declare -a connected_devices=()
+declare -a created_partition_nodes=()
 child_pid=
 
 log() {
@@ -29,12 +30,21 @@ cleanup() {
         fi
     done
     if [[ $mounts_clean -eq 1 ]]; then
+        local devices_clean=1
         for ((index=${#connected_devices[@]} - 1; index >= 0; index--)); do
             if ! qemu-nbd --disconnect "${connected_devices[index]}"; then
                 log "WARNING: unable to disconnect ${connected_devices[index]}"
+                devices_clean=0
                 status=1
             fi
         done
+        if [[ $devices_clean -eq 1 ]]; then
+            for ((index=${#created_partition_nodes[@]} - 1; index >= 0; index--)); do
+                rm -f -- "${created_partition_nodes[index]}"
+            done
+        else
+            log 'WARNING: preserving partition device nodes because an NBD connection is still active'
+        fi
     else
         log 'WARNING: preserving NBD connections because a filesystem is still mounted'
     fi
@@ -58,6 +68,42 @@ trap 'forward_signal INT 130' INT
 validate_device() {
     local device=$1
     [[ $device =~ ^/dev/nbd[0-9]+$ ]] || die "unsafe NBD device name: $device"
+}
+
+create_partition_node() {
+    local partition=$1
+    local device=${partition%p*}
+    local sysfs_name=${partition#/dev/}
+    local dev_file="/sys/class/block/$sysfs_name/dev"
+    local numbers=''
+    local major
+    local minor
+
+    [[ -b $partition ]] && return 0
+    [[ -e $partition ]] && return 1
+
+    # In a privileged container, udev may not create the node even though the
+    # kernel has exposed the partition in sysfs.  The sysfs dev file provides
+    # the authoritative major:minor pair; lsblk is a fallback for systems that
+    # expose the same information only through its block-device view.
+    if [[ -r $dev_file ]]; then
+        numbers=$(<"$dev_file")
+    fi
+    if [[ ! $numbers =~ ^[0-9]+:[0-9]+$ ]]; then
+        numbers=$(lsblk -nrpo NAME,MAJ:MIN,TYPE "$device" 2>/dev/null \
+            | awk -v partition="$partition" '$1 == partition && $3 == "part" { print $2; exit }' \
+            || true)
+    fi
+    [[ $numbers =~ ^[0-9]+:[0-9]+$ ]] || return 1
+    major=${numbers%%:*}
+    minor=${numbers#*:}
+
+    if mknod -- "$partition" b "$major" "$minor" 2>/dev/null; then
+        created_partition_nodes+=("$partition")
+        log "created missing partition device node $partition ($major:$minor)"
+        return 0
+    fi
+    return 1
 }
 
 mount_vhdx() {
@@ -111,13 +157,16 @@ mount_vhdx() {
     qemu-nbd "${connect_options[@]}" "$image"
     connected_devices+=("$device")
     partprobe "$device" 2>/dev/null || true
+    blockdev --rereadpt "$device" 2>/dev/null || true
     udevadm settle 2>/dev/null || true
 
     for attempt in {1..50}; do
         [[ -b $partition ]] && break
+        create_partition_node "$partition" || true
+        [[ -b $partition ]] && break
         sleep 0.1
     done
-    [[ -b $partition ]] || die "expected VHDX partition was not found: $partition"
+    [[ -b $partition ]] || die "expected VHDX partition device was not found: $partition"
 
     mount -o "$mount_mode" "$partition" "$mount_point"
     mounted_points+=("$mount_point")
@@ -172,20 +221,7 @@ fi
 
 [[ -d $mirror_root ]] || die "mirror root is not a directory: $mirror_root"
 mirror_root=$(realpath -- "$mirror_root")
-if [[ ${KYLIN_PUBLIC_SUBDIR:-} == /* ]]; then
-    die 'KYLIN_PUBLIC_SUBDIR must be relative to the mirror root'
-fi
-public_root=$(realpath -m -- "$mirror_root/${KYLIN_PUBLIC_SUBDIR:-.}")
-case "$public_root" in
-    "$mirror_root"|"$mirror_root"/*) ;;
-    *) die 'KYLIN_PUBLIC_SUBDIR escapes the mirror root' ;;
-esac
-if [[ ! -d $public_root ]]; then
-    mkdir -p "$public_root" \
-        || die "published mirror directory does not exist and cannot be created: $public_root"
-fi
-
-publish_root "$public_root"
+publish_root "$mirror_root"
 
 if [[ $# -eq 0 || $1 == serve ]]; then
     [[ $# -le 1 ]] || die "serve does not accept arguments: ${*:2}"
