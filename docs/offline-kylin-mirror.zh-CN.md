@@ -134,6 +134,30 @@ sudo ./scripts/linux/with-kylin-offline-vhdx.sh \
 `-RehashSource`/`--rehash-source` 可强制重读源镜像，排查源盘静默位翻转；
 内网导入端每轮始终做完整 SHA-256 校验。
 
+如果只需预先计算或刷新源镜像的 SHA-256 缓存，不创建 `outgoing` 数据，Linux
+使用 `--hash-only`，Windows 使用 `-HashOnly`。此模式不要求 `--media-root`/
+`-MediaRoot`；可与 `--skip-online-sync`/`-SkipOnlineSync` 组合，跳过在线同步：
+
+```bash
+sudo ./scripts/linux/export-kylin-offline-mirror.sh \
+  --skip-online-sync \
+  --hash-only \
+  --mirror-root /var/spool/apt-mirror/mirror \
+  --state-dir /var/lib/apt-mirror-offline
+```
+
+Windows/WSL 对应命令：
+
+```powershell
+.\scripts\windows\Export-KylinOfflineMirror.ps1 `
+  -SkipOnlineSync `
+  -HashOnly `
+  -MirrorRoot '/var/spool/apt-mirror/mirror' `
+  -StateDirectory '/var/lib/apt-mirror-offline'
+```
+
+哈希结果保存在状态目录的 `hash-cache.json`，后续正常导出会复用它。
+
 ### 下载中断与断点续传
 
 上述 PowerShell 和 Bash 导出脚本都是可重入的最终入口。网络错误、速度过慢或

@@ -2,7 +2,6 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
     [string]$MediaRoot,
 
     [string]$WslDistribution = 'Ubuntu',
@@ -11,7 +10,8 @@ param(
     [string]$StateDirectory = '/var/lib/apt-mirror-offline',
     [string]$VolumeSize = '0',
     [switch]$SkipOnlineSync,
-    [switch]$RehashSource
+    [switch]$RehashSource,
+    [switch]$HashOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -27,18 +27,23 @@ function Convert-ToWslPath([string]$InputPath) {
     return $converted.Trim()
 }
 
-if (-not (Test-Path -LiteralPath $MediaRoot -PathType Container)) {
+if (-not $HashOnly -and [string]::IsNullOrWhiteSpace($MediaRoot)) {
+    throw 'MediaRoot is required unless HashOnly is specified.'
+}
+if (-not $HashOnly -and -not (Test-Path -LiteralPath $MediaRoot -PathType Container)) {
     throw "Media root is not mounted: $MediaRoot"
 }
 
 $configWsl = Convert-ToWslPath $MirrorConfig
 $mirrorRootWsl = Convert-ToWslPath $MirrorRoot
 $stateDirectoryWsl = Convert-ToWslPath $StateDirectory
-$mediaFull = (Resolve-Path -LiteralPath $MediaRoot).Path
-$feedbackWindows = Join-Path $mediaFull 'feedback'
-$outgoingWindows = Join-Path $mediaFull 'outgoing'
-New-Item -ItemType Directory -Force -Path $feedbackWindows, $outgoingWindows | Out-Null
-$feedbackWsl = Convert-ToWslPath $feedbackWindows
+if (-not $HashOnly) {
+    $mediaFull = (Resolve-Path -LiteralPath $MediaRoot).Path
+    $feedbackWindows = Join-Path $mediaFull 'feedback'
+    $outgoingWindows = Join-Path $mediaFull 'outgoing'
+    New-Item -ItemType Directory -Force -Path $feedbackWindows, $outgoingWindows | Out-Null
+    $feedbackWsl = Convert-ToWslPath $feedbackWindows
+}
 
 if (-not $SkipOnlineSync) {
     $syncSucceeded = $false
@@ -63,6 +68,26 @@ if (-not $SkipOnlineSync) {
             Write-Warning 'Rerun this script with the same MirrorConfig and MirrorRoot to continue; do not use SkipOnlineSync yet.'
         }
     }
+}
+
+if ($HashOnly) {
+    $hashArguments = @(
+        '-d', $WslDistribution, '-u', 'root', '--',
+        'python3', '-m', 'apt_mirror.offline', 'hash', $mirrorRootWsl,
+        '--state-dir', $stateDirectoryWsl
+    )
+    if ($RehashSource) {
+        $hashArguments += '--rehash-source'
+    }
+
+    Write-Host 'Hashing mirror without creating outgoing data...'
+    & wsl.exe @hashArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "apt-mirror-offline hash failed with exit code $LASTEXITCODE"
+    }
+    & wsl.exe -d $WslDistribution -u root -- sync
+    Write-Host "Hash cache updated in $StateDirectory (hash-cache.json)"
+    return
 }
 
 $stamp = Get-Date -Format 'yyyyMMddTHHmmss'

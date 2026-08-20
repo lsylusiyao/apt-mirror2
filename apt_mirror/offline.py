@@ -466,6 +466,34 @@ def build_manifest(
     return manifest
 
 
+def hash_mirror(
+    source: Path,
+    state_dir: Path,
+    rehash_source: bool = False,
+    show_progress: bool = False,
+) -> Manifest:
+    source = source.resolve()
+    state_resolved = state_dir.resolve(strict=False)
+    try:
+        state_resolved.relative_to(source)
+    except ValueError:
+        pass
+    else:
+        raise OfflineError(
+            f"State directory must not be inside the mirror source: {state_resolved}"
+        )
+
+    state_dir.mkdir(parents=True, exist_ok=True)
+    if show_progress:
+        print("Scanning source mirror and computing hashes...", file=sys.stderr, flush=True)
+    manifest = build_manifest(source, state_dir / "hash-cache.json", rehash_source)
+    print(
+        f"Hashed {len(manifest.files)} files ({manifest.total_bytes} bytes); "
+        f"snapshot {manifest.snapshot_id}."
+    )
+    return manifest
+
+
 def _copy_verified(source: Path, destination: Path, entry: FileEntry) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.part")
@@ -1190,6 +1218,17 @@ def _parser() -> argparse.ArgumentParser:
         "--rehash-source", action="store_true", help="Ignore the source hash cache"
     )
 
+    hash_parser = subparsers.add_parser(
+        "hash", help="Hash a mirror and update the source hash cache without a bundle"
+    )
+    hash_parser.add_argument("source", type=Path, help="External mirror root")
+    hash_parser.add_argument(
+        "--state-dir", type=Path, required=True, help="Persistent external hash state"
+    )
+    hash_parser.add_argument(
+        "--rehash-source", action="store_true", help="Ignore the source hash cache"
+    )
+
     stage = subparsers.add_parser("stage", help="Stage one or more optical volumes")
     stage.add_argument("source", type=Path, help="Mounted disc, volume, or complete bundle")
     stage.add_argument("staging_dir", type=Path, help="Persistent staging directory")
@@ -1219,6 +1258,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.state_dir,
                 args.feedback_dir,
                 args.volume_size,
+                args.rehash_source,
+                show_progress=True,
+            )
+            return 0
+        if args.command == "hash":
+            hash_mirror(
+                args.source,
+                args.state_dir,
                 args.rehash_source,
                 show_progress=True,
             )

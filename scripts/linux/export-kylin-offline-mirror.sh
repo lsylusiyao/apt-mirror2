@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: export-kylin-offline-mirror.sh --media-root DIR [OPTIONS]
+Usage: export-kylin-offline-mirror.sh [--media-root DIR] [OPTIONS]
 
 Options:
   --config FILE          apt-mirror config (default: /etc/apt/mirror-kylin.list)
@@ -11,7 +11,8 @@ Options:
   --state-dir DIR        persistent ACK/hash state (default: /var/lib/apt-mirror-offline)
   --volume-size SIZE     optical payload limit such as 4300M (default: 0)
   --skip-online-sync     export the existing mirror without running apt-mirror
-  --rehash-source        ignore the external source hash cache for this export
+  --rehash-source        ignore the external source hash cache for this scan
+  --hash-only            update the hash cache without creating outgoing data
 EOF
 }
 
@@ -22,6 +23,7 @@ volume_size=0
 media_root=
 skip_online_sync=0
 rehash_source=0
+hash_only=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -48,6 +50,10 @@ while [[ $# -gt 0 ]]; do
             rehash_source=1
             shift
             ;;
+        --hash-only)
+            hash_only=1
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -60,12 +66,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z $media_root ]]; then
+if [[ $hash_only -eq 0 && -z $media_root ]]; then
     echo '--media-root is required.' >&2
     usage >&2
     exit 64
 fi
-if [[ ! -d $media_root || ! -w $media_root ]]; then
+if [[ $hash_only -eq 0 && (! -d $media_root || ! -w $media_root) ]]; then
     echo "Transfer media is not a writable directory: $media_root" >&2
     exit 73
 fi
@@ -108,6 +114,18 @@ if [[ $skip_online_sync -eq 0 ]]; then
         resume_notice
         exit "$sync_status"
     fi
+fi
+
+if [[ $hash_only -eq 1 ]]; then
+    hash_arguments=(hash "$mirror_root" --state-dir "$state_dir")
+    if [[ $rehash_source -eq 1 ]]; then
+        hash_arguments+=(--rehash-source)
+    fi
+    echo 'Hashing mirror without creating outgoing data...'
+    "${offline_cli[@]}" "${hash_arguments[@]}"
+    sync
+    echo "Hash cache updated: $state_dir/hash-cache.json"
+    exit 0
 fi
 
 mkdir -p "$media_root/feedback" "$media_root/outgoing" "$state_dir"

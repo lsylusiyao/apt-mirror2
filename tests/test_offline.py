@@ -12,6 +12,7 @@ import apt_mirror.offline as offline
 from apt_mirror.offline import (
     OfflineError,
     export_bundle,
+    hash_mirror,
     import_bundle,
     stage_volumes,
     verify_installed,
@@ -49,6 +50,27 @@ class TestOfflineMirror(TestCase):
         self.assertIn("Scanning source mirror and computing hashes", output)
         self.assertIn("Copying verified payloads", output)
         self.assertIn("100%", output)
+
+    def test_hash_mirror_updates_cache_without_creating_bundle(self):
+        payload = b"alpha"
+        (self.source / "pool" / "a.deb").write_bytes(payload)
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            manifest = hash_mirror(
+                self.source,
+                self.state,
+                rehash_source=True,
+                show_progress=True,
+            )
+
+        self.assertEqual(len(manifest.files), 1)
+        self.assertEqual(manifest.total_bytes, len(payload))
+        self.assertTrue((self.state / "hash-cache.json").is_file())
+        self.assertFalse((self.root / "outgoing").exists())
+        self.assertIn("Scanning source mirror and computing hashes", stderr.getvalue())
+        self.assertIn(manifest.snapshot_id, stdout.getvalue())
 
     def test_stored_paths_are_encoded_for_windows_media(self):
         unsafe_path = "pool/dep:1.deb"
