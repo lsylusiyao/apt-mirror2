@@ -64,17 +64,26 @@ mount_vhdx() {
     local image=$1
     local mount_point=$2
     local device=$3
-    local partition_number=$4
+    local partition_spec=$4
     local read_only=$5
-    local partition="${device}p${partition_number}"
+    local partition
     local pid_file="/sys/class/block/${device#/dev/}/pid"
     local -a connect_options=(--connect="$device" --format=vhdx)
     local mount_mode=rw
     local attempt
 
     validate_device "$device"
-    [[ $partition_number =~ ^[1-9][0-9]*$ ]] \
-        || die "invalid partition number for $image: $partition_number"
+    if [[ $partition_spec =~ ^[1-9][0-9]*$ ]]; then
+        # Keep accepting the historical partition-number form (for example,
+        # `1`) while allowing callers to provide `/dev/nbd0p1` directly.
+        partition="${device}p${partition_spec}"
+    else
+        [[ $partition_spec =~ ^/dev/nbd[0-9]+p[1-9][0-9]*$ ]] \
+            || die "invalid partition path for $image: $partition_spec"
+        [[ ${partition_spec%p*} == "$device" ]] \
+            || die "partition $partition_spec does not belong to device $device"
+        partition=$partition_spec
+    fi
     [[ -f $image ]] || die "VHDX file does not exist: $image"
     [[ -s $image ]] || die "VHDX file is empty (was the host file mounted?): $image"
     [[ $EUID -eq 0 ]] || die 'VHDX mode must run as root'

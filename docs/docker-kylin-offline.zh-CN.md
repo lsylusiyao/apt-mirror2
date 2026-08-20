@@ -118,13 +118,17 @@ docker run -d \
 | 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
 | `KYLIN_MIRROR_NBD` | `/dev/nbd0` | 目标 VHDX 的 NBD 设备 |
-| `KYLIN_MIRROR_PARTITION` | `1` | 目标 VHDX 的分区号 |
+| `KYLIN_MIRROR_PARTITION` | `/dev/nbd0p2` | 目标 VHDX 的分区设备路径；也兼容填写分区号（如 `1`） |
 | `KYLIN_MIRROR_MOUNT` | `/mnt/kylin-mirror` | 目标 VHDX 挂载点 |
 | `KYLIN_MIRROR_SUBDIR` | `mirror` | 挂载文件系统内的镜像相对路径 |
 | `KYLIN_PUBLIC_SUBDIR` | `archive.kylinos.cn` | nginx 相对镜像根下移的目录；设为 `.` 可恢复旧 URL 层级 |
 | `KYLIN_TRANSFER_NBD` | `/dev/nbd1` | 传输 VHDX 的 NBD 设备 |
-| `KYLIN_TRANSFER_PARTITION` | `1` | 传输 VHDX 的分区号 |
+| `KYLIN_TRANSFER_PARTITION` | `/dev/nbd1p1` | 传输 VHDX 的分区设备路径；也兼容填写分区号 |
 | `KYLIN_TRANSFER_MOUNT` | `/mnt/kylin-transfer` | 传输 VHDX 挂载点 |
+
+如果宿主机分配的 NBD 设备不同，需要同时设置设备和对应的分区路径。例如使用
+`/dev/nbd2` 的第二分区时，增加 `-e KYLIN_MIRROR_NBD=/dev/nbd2` 和
+`-e KYLIN_MIRROR_PARTITION=/dev/nbd2p2`。两项必须指向同一个 NBD 设备。
 
 不要让同一个 VHDX 同时被宿主机、另一个容器或虚拟机以读写方式挂载。正常使用
 `docker stop -t 30 kylin-mirror` 停止容器；入口脚本会先同步、卸载文件系统并断开
