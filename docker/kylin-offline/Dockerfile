@@ -30,6 +30,7 @@ RUN apt-get update \
         qemu-utils \
         udev \
         util-linux \
+        xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/apt-mirror2
@@ -40,6 +41,7 @@ RUN install -m 0644 examples/kylin/mirror-amd64.list /etc/apt/mirror-kylin.list 
     && install -m 0644 docker/kylin-offline/nginx.conf /etc/nginx/nginx.conf \
     && install -m 0755 docker/kylin-offline/entrypoint.sh /usr/local/bin/kylin-entrypoint \
     && mkdir -p /srv/apt-mirror /mnt/kylin-mirror /mnt/kylin-transfer /var/www \
+    && chmod 0755 /var/www \
     && touch /kylin-target.vhdx /kylin-transfer.vhdx \
     && /opt/venv/bin/apt-mirror-offline --help >/dev/null \
     && nginx -t

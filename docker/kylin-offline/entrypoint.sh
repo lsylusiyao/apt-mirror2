@@ -180,6 +180,7 @@ publish_root() {
 
     [[ -d $requested_root ]] || die "mirror root is not a directory: $requested_root"
     resolved_root=$(realpath -- "$requested_root")
+    chmod 0755 -- "$resolved_root" 2>/dev/null || true
     rm -f -- "$temporary_link"
     ln -s -- "$resolved_root" "$temporary_link"
     mv -Tf -- "$temporary_link" /var/www/kylin-mirror
@@ -205,9 +206,11 @@ if [[ -n ${KYLIN_MIRROR_VHDX:-} ]]; then
     if [[ ! -d $mirror_root && ${KYLIN_MIRROR_READ_ONLY:-0} == 0 ]]; then
         mkdir -p "$mirror_root"
     fi
+    chmod 0755 -- "$mirror_root" 2>/dev/null || true
 else
     mirror_root=$KYLIN_MIRROR_ROOT
     mkdir -p "$mirror_root"
+    chmod 0755 -- "$mirror_root" 2>/dev/null || true
 fi
 
 if [[ -n ${KYLIN_TRANSFER_VHDX:-} ]]; then
